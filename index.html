@@ -195,9 +195,11 @@ textarea.field{resize:none;line-height:1.5}
 
 /* ---------- constants ---------- */
 var SEASONS=['Spring','Summer','Autumn','Winter'];
-var SKILLS=['Listening','Speaking','Reading','Writing','Pronunciation','Grammar','Vocabulary','Orthography','Assignment'];
+/* Every skill block of the gradesheet, in sheet order. Only the evaluated ones are marked in the app; the rest stay empty. */
+var SHEET_SKILLS=['Listening','Speaking','Reading','Writing','Pronunciation','Grammar','Vocabulary','Orthography','Assignment'];
 var BOARD=['Speaking','Reading','Writing'];
-var TYPES={'Adults':{behavior:false},'Start':{behavior:false},'Primer1-2':{behavior:true},'Run1-Reach4':{behavior:false},'Step-move-jump':{behavior:true}};
+var BEHAVIOUR='Behaviour';
+var TYPES={'Adults':{behaviour:false,note:'Marks Speaking, Reading and Writing.'},'Teens':{behaviour:false,note:'Marks Speaking, Reading and Writing.'},'Kids':{behaviour:true,note:'Marks Speaking, Reading and Writing, plus a Behaviour mark.'}};
 var SLOTS=4, MAX_SESSIONS=20, MAX_STUDENTS=40, MIN_MARK=1, MAX_MARK=4;
 var KEY='gradebook.v1';
 
@@ -241,12 +243,11 @@ function seed(){
   var rnd=mulberry(7);
   function mkClass(name,type,season,year,names,nSess,doneSess){
     var c={id:uid(),name:name,type:type,season:season,year:year,students:[],sessions:[]};
-    var sk=SKILLS.concat(TYPES[type].behavior?['Behavior']:[]);
+    var sk=BOARD.concat(TYPES[type].behaviour?[BEHAVIOUR]:[]);
     names.forEach(function(n,i){
       var s={id:uid(),name:n,sid:String(4001+i+(name.length*7)),marks:{}};
       sk.forEach(function(k){
         var max=BOARD.indexOf(k)>=0?4:3, cnt=Math.floor(rnd()*max), arr=Array(SLOTS).fill(null);
-        if(BOARD.indexOf(k)<0&&rnd()<.45)cnt=0;
         for(var j=0;j<cnt;j++)arr[j]=MIN_MARK+Math.floor(rnd()*(MAX_MARK-MIN_MARK+1));
         s.marks[k]=arr;
       });
@@ -267,17 +268,26 @@ function seed(){
   var y=nowYear();
   return {years:[y],settings:{},classes:[
     mkClass('Basic1-Ad3','Adults','Autumn',y,names1,5,4),
-    mkClass('Basic2-Ad1','Adults','Autumn',y,names2,3,3)
+    mkClass('Teens-B2','Teens','Autumn',y,names2,3,3)
   ]};
 }
 function load(){try{var s=localStorage.getItem(KEY);if(s)return JSON.parse(s);}catch(e){}return null;}
 function saveLocal(){try{localStorage.setItem(KEY,JSON.stringify(db));}catch(e){}}
 function save(){saveLocal();queueFlush();}
+/* Older saves used five class types and the label "Behavior". Bring them in line. */
+function fixClass(c){
+  if(!TYPES[c.type])c.type=(c.marks_has_behaviour||/primer|step|move|jump|kid/i.test(String(c.type)))?'Kids':/teen|run|reach/i.test(String(c.type))?'Teens':'Adults';
+  (c.students||[]).forEach(function(st){
+    if(st.marks&&st.marks.Behavior){if(!st.marks[BEHAVIOUR])st.marks[BEHAVIOUR]=st.marks.Behavior;delete st.marks.Behavior;}
+  });
+  return c;
+}
 var db=load()||(IN_TG?{years:[],classes:[],settings:{}}:seed());
 if(!db.settings)db.settings={};
+db.classes.forEach(fixClass);
 
 var cls=function(id){return db.classes.filter(function(c){return c.id===id;})[0];};
-var skillsFor=function(c){return SKILLS.concat(TYPES[c.type].behavior?['Behavior']:[]);};
+var skillsFor=function(c){return BOARD.concat(TYPES[c.type].behaviour?[BEHAVIOUR]:[]);};
 function marks(s,k){if(!s.marks[k])s.marks[k]=Array(SLOTS).fill(null);return s.marks[k];}
 function calls(s,k){return marks(s,k).filter(function(v){return v!==null;}).length;}
 function avg(s,k){var m=marks(s,k).filter(function(v){return v!==null;});if(!m.length)return null;return m.reduce(function(a,b){return a+b;},0)/m.length;}
@@ -364,7 +374,7 @@ function startSync(){
     var sm=srv.meta, metaDirty=ls.meta!==undefined&&ls.meta!==hash(metaJSON());
     if(sm&&!metaDirty){db.years=sm.years||[];db.settings=sm.settings||{};}
     ns.meta=sm?hash(JSON.stringify({years:sm.years||[],settings:sm.settings||{}})):undefined;
-    db.classes=merged; synced=ns; saveSynced(); saveLocal();
+    merged.forEach(fixClass); db.classes=merged; synced=ns; saveSynced(); saveLocal();
     render();
     return flush();
   }).catch(function(e){setSync('error');toast(e&&e.message?e.message:'Could not reach Google');});
@@ -552,7 +562,7 @@ function sheetBody(){
   }
   return '';
 }
-function typeNote(t){return TYPES[t].behavior?'This type adds a Behavior block next to the nine skills.':'Uses the nine skill blocks: Listening to Assignment.';}
+function typeNote(t){return TYPES[t].note+' The other gradesheet columns stay in the export, empty.';}
 
 /* ---------- misc ---------- */
 function toast(m){var t=document.createElement('div');t.className='toast';t.setAttribute('role','status');t.textContent=m;document.body.appendChild(t);setTimeout(function(){t.remove();},2300);}
@@ -566,11 +576,11 @@ function initTG(){
   startSync();
 }
 function csv(c){
-  var rows=[], sk=skillsFor(c);
+  var rows=[], sk=SHEET_SKILLS.concat(TYPES[c.type].behaviour?[BEHAVIOUR]:[]), ev=skillsFor(c);
   c.students.forEach(function(s,i){
     var r=[i+1,s.name,s.sid||''];
     for(var n=1;n<=MAX_SESSIONS;n++){var x=c.sessions.filter(function(q){return q.n===n;})[0];r.push(x&&x.done?attOf(x,s):'');}
-    sk.forEach(function(k){var m=marks(s,k);for(var j=0;j<5;j++)r.push(j<SLOTS&&m[j]!==null?m[j]:'');r.push('','');});
+    sk.forEach(function(k){var on=ev.indexOf(k)>=0, m=on?marks(s,k):[];for(var j=0;j<5;j++)r.push(on&&j<SLOTS&&m[j]!=null?m[j]:'');r.push('','');});
     rows.push(r);
   });
   return '\uFEFF'+rows.map(function(r){return r.map(function(f){return typeof f==='number'?f:'"'+String(f).replace(/"/g,'""')+'"';}).join(',');}).join('\r\n');
